@@ -112,8 +112,6 @@ def load_rom(fn: string): NesRom?
                 res.chrRom[i].v[j] = data[filePos]
                 filePos++
 
-        print("2 - Chunk 0 offset 4: {res.prgRom[0].v[4]}\n")
-
         res.error = ""
         res.isValid = true
     

@@ -32,7 +32,6 @@ class Bus
     def read(address: int)
         let sanitizedAddr = address & int(0xFFFF)
         let effectiveAddr = mapper->mapAddress(sanitizedAddr)
-        print("Bus: read {uint(address)}\n")
         for device in devices
             if device != null && device->checkAddress(effectiveAddr)
                 return device->read(effectiveAddr) & int(0xFF)

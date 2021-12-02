@@ -17,9 +17,7 @@ def initialize
     nes->init()
     rom = load_rom("rom/nestest.nes")
     nes->insertCartridge(rom)
-    nes.cpu.dbgMode = true
     nes->reset()
-    nes.cpu.pc = int(0xC000)
     return
 
 // this function is called to update game data,
@@ -28,7 +26,7 @@ def initialize
 def act(dt: float)
     if get_key(VK_ESCAPE)
         schedule_quit_game()
-    nes->clock(1000)
+    nes->clock(2000000)
     return
 
 // this function will be called every frame after 'act',
@@ -40,3 +38,4 @@ def draw
         let byte = format(" %02X", nes.ram.ram[i])
         memDump += byte
     text_out(0, 60, "RAM at 0x0000:{memDump}", make_color(1.0))
+    text_out(0, 75, "Total clocks: {nes.cpu.totalCycles}", make_color(1.0))

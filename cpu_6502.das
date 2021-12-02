@@ -297,9 +297,9 @@ def cpu_i_BEQ(var cpu: Cpu6502; am: AddressingMode)
 def cpu_i_BIT(var cpu: Cpu6502; am: AddressingMode)
     let fetched = invoke(am.read, cpu)
     let res = cpu.a & fetched
-    cpu_set_flag(cpu, CpuFlags C, res > int(0xFF))
     cpu_set_flag(cpu, CpuFlags Z, (res & int(0xFF)) == 0)
-    cpu_set_flag(cpu, CpuFlags N, (res & int(0x80)) != 0)
+    cpu_set_flag(cpu, CpuFlags N, (fetched & int(0x80)) != 0)
+    cpu_set_flag(cpu, CpuFlags V, (fetched & int(0x40)) != 0)
     return 0
 
 def cpu_i_BMI(var cpu: Cpu6502; am: AddressingMode)
@@ -630,7 +630,7 @@ def cpu_i_LAX(var cpu: Cpu6502; am: AddressingMode)
     cpu_set_flag(cpu, CpuFlags N, (res & int(0x80)) != 0)
     cpu.a = res
     cpu.x = res
-    return 0
+    return 1
 
 def cpu_i_SAX(var cpu: Cpu6502; am: AddressingMode)
     invoke(am.write, cpu, cpu.a & cpu.x)
@@ -797,7 +797,7 @@ let cpu_instruction_table <- [[CpuInstruction[]
     [[CpuInstruction name="ORA",  impl=@@cpu_i_ORA, addrMode=cpu_a_ABSY, cycles=4]]; // 0x19
     [[CpuInstruction name="NOP?", impl=@@cpu_i_NOP, addrMode=cpu_a_IMP,  cycles=2]]; // 0x1A
     [[CpuInstruction name="SLO?", impl=@@cpu_i_SLO, addrMode=cpu_a_ABSY, cycles=7]]; // 0x1B
-    [[CpuInstruction name="NOP?", impl=@@cpu_i_NOP, addrMode=cpu_a_ABSX, cycles=4]]; // 0x1C
+    [[CpuInstruction name="NOP?", impl=@@cpu_i_IGN, addrMode=cpu_a_ABSX, cycles=4]]; // 0x1C
     [[CpuInstruction name="ORA",  impl=@@cpu_i_ORA, addrMode=cpu_a_ABSX, cycles=4]]; // 0x1D
     [[CpuInstruction name="ASL",  impl=@@cpu_i_ASL, addrMode=cpu_a_ABSX, cycles=7]]; // 0x1E
     [[CpuInstruction name="SLO?", impl=@@cpu_i_SLO, addrMode=cpu_a_ABSX, cycles=7]]; // 0x1F
@@ -1086,7 +1086,7 @@ def cpu_step(var cpu: Cpu6502)
     cpu.totalCycles += cpu.cycles
     cpu.prevOpcode = opcode
     cpu.prevPc = storedPc
-    print("{cpu.prevPc} {instruction.name}\n")
+
 
 def cpu_step_dbg(var cpu: Cpu6502)
     if cpu.halt

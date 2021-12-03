@@ -2,21 +2,27 @@ require bus
 require ram
 require rom
 require cpu_6502
+require ppu
 require cartridge
 
 let MASTER_CLOCK_SPEED = 21477272 // 21.477272 MHz for NTSC version
 let PPU_CLOCK_SPEED = MASTER_CLOCK_SPEED / 4
+let MIN_UPDATES_PER_SECOND = 100
+let MAX_CLOCK_PER_UPDATE = int64(PPU_CLOCK_SPEED / MIN_UPDATES_PER_SECOND)
 
 class Nes
     cpuBus: Bus?
     ppuBus: Bus?
     ram: Ram?
     cpu: Cpu6502?
+    ppu: Ppu2C02?
     globalClock: uint64
     cpuIdleClocks: int
     mapperCpuBusId: int
     mapperPpuBusId: int
     cartridge: Cartridge?
+    timeLeft: double
+    timePassed: double
 
     def init()
         cpuBus = new Bus()
@@ -25,36 +31,63 @@ class Nes
         cpuBus->attach(ram)
         cpu = new Cpu6502()
         cpu->attachBus(cpuBus)
+        ppu = new Ppu2C02()
+        ppu->init()
+        ppu->attachBus(ppuBus)
+        cpuBus->attach(ppu)
+        ppu->attachCpu(cpu)
+        ppuBus->attach(ppu->getPpuBusDevice())
         mapperCpuBusId = -1
         mapperPpuBusId = -1
 
     def reset()
         cpu->reset()
+        ppu->reset()
         globalClock = 0ul
         cpuIdleClocks = 0
+        timeLeft = 0lf
+        timePassed = 0lf
+
+    def update(dt: float)
+        timeLeft += double(dt)
+        var nesClocks = int64(timeLeft * double(PPU_CLOCK_SPEED))
+        if nesClocks > MAX_CLOCK_PER_UPDATE
+            nesClocks = MAX_CLOCK_PER_UPDATE
+        if cpu.halt
+            nesClocks = 0l
+        //if nesClocks > 3000l
+        //    nesClocks = 3000l
+        let updateTime = double(nesClocks) / double(PPU_CLOCK_SPEED)
+        timeLeft -= updateTime
+        timePassed += updateTime
+        clock(int(nesClocks))
 
     def clock(clocks: int)
         var clockLeft = clocks
         while globalClock % 3ul != 0ul && clockLeft > 0
-            // TODO: clock the PPU once
+            ppu->clock(1)
             globalClock++
             clockLeft--
         while clockLeft > 0
             if cpuIdleClocks > 0
                 if cpuIdleClocks <= clockLeft
-                    // TODO: clock the PPU cpuIdleClocks times
+                    ppu->clock(cpuIdleClocks)
                     globalClock += uint64(cpuIdleClocks)
                     clockLeft -= cpuIdleClocks
                     cpuIdleClocks = 0
                 else
-                    // TODO: clock the PPU clockLeft times
+                    ppu->clock(clockLeft)
                     globalClock += uint64(cpuIdleClocks)
                     cpuIdleClocks -= clockLeft
                     clockLeft = 0
             else
                 cpu_step(*cpu)
                 cpuIdleClocks = cpu.cycles * 3
-                
+
+
+    def drawScreen(x: int; y: int; scale: float)
+        ppu->drawScreen(x, y, scale)
+
 
     def insertCartridge(rom: NesRom?)
         if mapperCpuBusId >= 0

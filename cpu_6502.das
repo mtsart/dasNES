@@ -31,17 +31,42 @@ class Cpu6502: Cpu
     prevPc: int
     halt: bool
     dbgMode: bool
+    irqPending: bool
+    nmiPending: bool
 
     def attachBus(b: Bus?)
         bus = b
 
     def override irq(): void
-        return
+        irqPending = true
 
     def override nmi(): void
-        return
+        nmiPending = true
+
+    def irq_impl(): void
+        cpu_st_push(self, pc >> 8)
+        cpu_st_push(self, pc)
+
+        cpu_set_flag(self, CpuFlags B, 0)
+        cpu_st_push(self, status)
+        cpu_set_flag(self, CpuFlags I, 1)
+
+        pc = cpu_read(self, int(0xFFFE)) | (cpu_read(self, int(0xFFFF)) << 8)
+        cycles += 7
+
+    def nmi_impl(): void
+        cpu_st_push(self, pc >> 8)
+        cpu_st_push(self, pc)
+
+        cpu_set_flag(self, CpuFlags B, 0)
+        cpu_st_push(self, status)
+        cpu_set_flag(self, CpuFlags I, 1)
+
+        pc = cpu_read(self, int(0xFFFA)) | (cpu_read(self, int(0xFFFB)) << 8)
+        cycles += 7
 
     def override reset(): void
+        print("CPU reset\n")
         a = 0
         x = 0
         y = 0
@@ -51,6 +76,8 @@ class Cpu6502: Cpu
         cycles = 7
         totalCycles = cycles
         absAddr = 0
+        irqPending = false
+        nmiPending = false
         if dbgMode
             let f = fopen("6502.log", "wt")
             fclose(f)
@@ -1075,6 +1102,15 @@ def cpu_step(var cpu: Cpu6502)
         return
     if cpu.halt
         return
+    if cpu.nmiPending
+        cpu.nmiPending = false
+        cpu->nmi_impl()
+        return
+    if cpu.irqPending
+        cpu.irqPending = false
+        if !cpu_get_flag_bool(cpu, CpuFlags I)
+            cpu->irq_impl()
+            return
     let storedPc = cpu.pc
     let opcode = cpu_read(cpu, cpu.pc)
     cpu.pc = (cpu.pc + 1) & int(0xFFFF)

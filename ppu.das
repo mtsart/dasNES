@@ -107,6 +107,7 @@ class Ppu2C02: Device
     rgbPalette: uint[64]
     oam: int[256]
     ppuWrites: int
+    frameCount: int
 
     def init()
         backbuffer <- create_image(256, 240)
@@ -187,8 +188,8 @@ class Ppu2C02: Device
         var size: int2
         size.x = int(float(VISIBLE_PIXELS) * scale)
         size.y = int(float(VISIBLE_SCANLINES) * scale)
-        //screen |> draw_image(x, y, make_color(1.0), size)
-        backbuffer |> draw_image(x, y, make_color(1.0), size)
+        screen |> draw_image(x, y, make_color(1.0), size)
+        //backbuffer |> draw_image(x, y, make_color(1.0), size)
 
     def attachBus(b: Bus?)
         ppuBus = b
@@ -205,6 +206,7 @@ class Ppu2C02: Device
         print("PPU reset\n")
         reg.status = 0
         reg.w = false
+        frameCount = 0
 
     def clock(clocksPassed: int)
         for i in range(0, clocksPassed)
@@ -215,17 +217,20 @@ class Ppu2C02: Device
                 if scanline >= TOTAL_SCANLINES
                     scanline = -1
                     frameComplete = true
-            if cycle == 1 && scanline == VISIBLE_SCANLINES + 1
-                reg.status |= int(PpuStatus VBlank)
-                if (reg.control & int(PpuControl EnableNMI)) != 0
-                    cpu->nmi()
-                screen := backbuffer
-            if cycle == 1 && scanline == -1
-                reg.status = 0
-            if scanline < VISIBLE_SCANLINES
-                let renderEnabled = isRenderEnabled()
-                if (cycle >= 2 && cycle < 258) || (cycle >= 321 && cycle < 338)
+            let renderEnabled = isRenderEnabled()
+            // Pre-render scanline
+            if scanline == -1
+                if cycle == 1
+                    reg.status = 0
+                    frameCount++
+                elif cycle >= 280 && cycle <= 304
                     if renderEnabled
+                        // move Y component from tAddr to vAddr
+                        reg.vAddr &= int(0x041F)
+                        reg.vAddr |= reg.tAddr & ~int(0x041F)
+            elif scanline >= 0 && scanline < VISIBLE_SCANLINES
+                if (cycle >= 1 && cycle < 258) || (cycle >= 321 && cycle < 338)
+                    if cycle >= 2
                         updateShifters()
                     let step = (cycle - 1) & 7
                     if step == 0
@@ -233,7 +238,8 @@ class Ppu2C02: Device
                         bg.shiftMsb = (bg.shiftMsb & int(0xFF00)) | bg.tileMsb
                         bg.shiftLAttr = (bg.shiftLAttr & int(0xFF00)) | (((bg.tileAttr & 1) == 0) ? 0 : int(0xFF))
                         bg.shiftHAttr = (bg.shiftHAttr & int(0xFF00)) | (((bg.tileAttr & 2) == 0) ? 0 : int(0xFF))
-                        bg.tileId = ppuBus->read(int(0x2000) | (reg.vAddr & int(0x0FFF)))
+                        let tileIdAddr = int(0x2000) | (reg.vAddr & int(0x0FFF))
+                        bg.tileId = ppuBus->read(tileIdAddr)
                     elif step == 2
                         // see https://wiki.nesdev.org/w/index.php?title=PPU_scrolling for details
                         var attrAddress = int(0x23C0) // 960 bytes into vram
@@ -257,6 +263,8 @@ class Ppu2C02: Device
                     elif step == 7
                         if renderEnabled
                             coarseXInc()
+                if cycle >= 0 && cycle < VISIBLE_PIXELS
+                    renderPixel()
                 if cycle == 256
                     if renderEnabled
                         YInc()
@@ -272,12 +280,12 @@ class Ppu2C02: Device
                         chooseSprites()
                 if cycle == 340
                     preloadSprites()
-                if scanline == -1 && cycle >= 280 && cycle <= 304
-                    // move Y component from tAddr to vAddr
-                    reg.vAddr &= int(0x041F)
-                    reg.vAddr |= reg.tAddr & ~int(0x041F)
-                if scanline >= 0 && cycle >= 0 && cycle < VISIBLE_PIXELS
-                    renderPixel()
+            elif scanline == VISIBLE_SCANLINES + 1
+                if cycle == 1
+                    reg.status |= int(PpuStatus VBlank)
+                    if (reg.control & int(PpuControl EnableNMI)) != 0
+                        cpu->nmi()
+                    screen := backbuffer
 
     def updateShifters()
         if (reg.mask & int(PpuMask ShowBg)) != 0
@@ -394,15 +402,15 @@ class Ppu2C02: Device
                 bgPixel = ((bg.shiftLsb & currentBit) >> shiftL) | ((bg.shiftMsb & currentBit) >> shiftH)
                 bgPalette = ((bg.shiftLAttr & currentBit) >> shiftL) | ((bg.shiftHAttr & currentBit) >> shiftH)
 
-        if (reg.mask & int(PpuMask ShowFg)) != 0 && false
+        if (reg.mask & int(PpuMask ShowFg)) != 0
             fg.drawingSprite0 = false
             if (reg.mask & int(PpuMask FgLeft)) != 0 || cycle > 8
                 for i in range(0, fg.spriteCount)
                     if fg.sprites[i].x > -8 && fg.sprites[i].x <= 0
-                        fgPixel = fg.spriteShiftLsb[i] & int(0x80) >> 8
-                        fgPixel |= fg.spriteShiftMsb[i] & int(0x80) >> 7
+                        fgPixel = (fg.spriteShiftLsb[i] & int(0x80)) >> 7
+                        fgPixel |= (fg.spriteShiftMsb[i] & int(0x80)) >> 6
                         fgPalette = (fg.sprites[i].attr & 3) + 4
-                        fgPriority = (fg.sprites[i].attr & int(0x20))
+                        fgPriority = (fg.sprites[i].attr & int(0x20)) ^ int(0x20)
                         if fgPixel != 0
                             if i == 0
                                 fg.drawingSprite0 = true
@@ -415,12 +423,15 @@ class Ppu2C02: Device
                 pixel = fgPixel
                 palette = fgPalette
         else
-            if fgPixel != 0 && fgPriority != 0
+            if fgPixel != 0
                 if fg.haveSprite0 && fg.drawingSprite0
                     reg.status |= int(PpuStatus S0Hit)
-                pixel = fgPixel
-                palette = fgPalette
+                if fgPriority != 0
+                    pixel = fgPixel
+                    palette = fgPalette
 
+        if pixel == 0
+            palette = 0
         let colorIdx = ppuBusDevice.palette[(palette << 2) + pixel] & int(0x3F)
         backbuffer |> set_pixel(cycle, scanline, rgbPalette[colorIdx])
         return

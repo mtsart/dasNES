@@ -25,7 +25,6 @@ class DmaEngine: Device
         ppu.oam[dmaAddr] = data
         dmaAddr++
         if dmaAddr >= int(0x100)
-            print("Finish DMA\n")
             active = false
 
     def override checkAddress(address: int): bool
@@ -35,7 +34,6 @@ class DmaEngine: Device
         return 0
     
     def override write(address: int; data: int): void
-        print("Start DMA from {uint(data) * 0x100}\n")
         dmaPage = data
         dmaAddr = 0
         active = true

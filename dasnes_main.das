@@ -35,6 +35,10 @@ def act(dt: float)
         let curTime = get_time_after_start()
         let dt2 = curTime - prevTime
         prevTime = curTime
+        if get_key(VK_BACK)
+            nes->reset()
+        if get_key(VK_H)
+            nes.cpu.halt = true
         nes->update(dt2)
 
 // this function will be called every frame after 'act',
@@ -68,6 +72,7 @@ def draw
     let cxFmt = format("%02d", nes.ppu.reg.vAddr & 31)
     let cyFmt = format("%02d", (nes.ppu.reg.vAddr >> 5) & 31)
     text_out(0, 605, "PPU: {idFmt} {lsbFmt} {msbFmt} {vFmt} {fxFmt} {fyFmt} {cxFmt} {cyFmt} {nes.ppu.ppuWrites} {nes.ppu.cycle} {nes.ppu.scanline} {uint(nes.ppu.reg.control)} {uint(nes.ppu.reg.tAddr)}", make_color(1.0))
+    text_out(0, 620, "PPU frame: {nes.ppu.frameCount}", make_color(1.0))
     for i in range(0, 32)
         for j in range(0, 2)
             let idx = (j * 32 + i)
@@ -78,3 +83,16 @@ def draw
             let x = nes.ppu.oam[offset + 3]
             var oamEntry = "X:{format("%-3d", x)} Y:{format("%-3d", y)} ID:{format("%02X", id)} ATTR:{format("%02X", attr)}"
             text_out(550 + j * 310, i * 15, "{format("%02d", idx)}: {oamEntry}", make_color(1.0))
+    for i in range(0, 8)
+        if i < nes.ppu.fg.spriteCount
+            let y = nes.ppu.fg.sprites[i].y
+            let id = nes.ppu.fg.sprites[i].id
+            let attr = nes.ppu.fg.sprites[i].attr
+            let x = nes.ppu.fg.sprites[i].x
+            let lsb = nes.ppu.fg.spriteShiftLsb[i] & int(0xFF)
+            let msb = nes.ppu.fg.spriteShiftMsb[i] & int(0xFF)
+            var oamEntry = "X:{format("%-3d", x)} Y:{format("%-3d", y)} ID:{format("%02X", id)} ATTR:{format("%02X", attr)} LSB:{format("%02X", lsb)} MSB:{format("%02X", msb)}"
+            text_out(660, 500 + i * 15, "{format("%02d", i)}: {oamEntry}", make_color(1.0))
+        else
+            var oamEntry = "X:--- Y:--- ID:-- ATTR:-- LSB:-- MSB:--"
+            text_out(660, 500 + i * 15, "{format("%02d", i)}: {oamEntry}", make_color(1.0))

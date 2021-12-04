@@ -82,6 +82,10 @@ def load_rom(fn: string): NesRom?
         res.useMirroring = (uint(fileHdr.flags6) & 0x08) != 0x00
         res.mapper = int((uint(fileHdr.flags6) >> 0x04) | (uint(fileHdr.flags7) & 0xF0))
 
+        if res.mapper != 0
+            res.error = "Unsupported mapper {res.mapper}"
+            return
+
         var filePos = hdrSize
 
         if res.haveTrainer

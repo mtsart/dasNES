@@ -15,7 +15,6 @@ struct PpuRegs
     mask: int
     status: int
     oamAddr: int
-    oamData: int
     scroll: int
     ppuData: int
     vAddr: int
@@ -32,6 +31,14 @@ struct BgState
     shiftMsb: int
     shiftLAttr: int
     shiftHAttr: int
+
+struct FgState
+    sprites: SelectedSprite[8]
+    spriteShiftLsb: int[8]
+    spriteShiftMsb: int[8]
+    spriteCount: int
+    haveSprite0: bool
+    drawingSprite0: bool
 
 enum PpuControl
     EnableNMI = int(0x80)
@@ -78,6 +85,13 @@ class Ppu2C02PpuBusDevice: Device
             palette[address - int(0x3F00)] = data
 
 
+struct SelectedSprite
+    y: int
+    id: int
+    attr: int
+    x: int
+
+
 class Ppu2C02: Device
     ppuBus: Bus?
     ppuBusDevice: Ppu2C02PpuBusDevice?
@@ -89,7 +103,9 @@ class Ppu2C02: Device
     screen: Image
     backbuffer: Image
     bg: BgState
+    fg: FgState
     rgbPalette: uint[64]
+    oam: int[256]
     ppuWrites: int
 
     def init()
@@ -205,15 +221,12 @@ class Ppu2C02: Device
                     cpu->nmi()
                 screen := backbuffer
             if cycle == 1 && scanline == -1
-                reg.status &= ~int(PpuStatus VBlank)
+                reg.status = 0
             if scanline < VISIBLE_SCANLINES
                 let renderEnabled = isRenderEnabled()
                 if (cycle >= 2 && cycle < 258) || (cycle >= 321 && cycle < 338)
                     if renderEnabled
-                        bg.shiftLsb <<= 1
-                        bg.shiftMsb <<= 1
-                        bg.shiftLAttr <<= 1
-                        bg.shiftHAttr <<= 1
+                        updateShifters()
                     let step = (cycle - 1) & 7
                     if step == 0
                         bg.shiftLsb = (bg.shiftLsb & int(0xFF00)) | bg.tileLsb
@@ -256,12 +269,88 @@ class Ppu2C02: Device
                         // move X component from tAddr to vAddr
                         reg.vAddr &= ~int(0x041F)
                         reg.vAddr |= reg.tAddr & int(0x041F)
+                        chooseSprites()
+                if cycle == 340
+                    preloadSprites()
                 if scanline == -1 && cycle >= 280 && cycle <= 304
                     // move Y component from tAddr to vAddr
                     reg.vAddr &= int(0x041F)
                     reg.vAddr |= reg.tAddr & ~int(0x041F)
                 if scanline >= 0 && cycle >= 0 && cycle < VISIBLE_PIXELS
                     renderPixel()
+
+    def updateShifters()
+        if (reg.mask & int(PpuMask ShowBg)) != 0
+            bg.shiftLsb <<= 1
+            bg.shiftMsb <<= 1
+            bg.shiftLAttr <<= 1
+            bg.shiftHAttr <<= 1
+
+        if (reg.mask & int(PpuMask ShowFg)) != 0 && cycle >= 1 && cycle < 258
+            for i in range (0, fg.spriteCount)
+                if fg.sprites[i].x > -8
+                    if fg.sprites[i].x <= 0
+                        fg.spriteShiftLsb[i] <<= 1
+                        fg.spriteShiftMsb[i] <<= 1
+                    fg.sprites[i].x--
+
+    def chooseSprites()
+        fg.spriteCount = 0
+        fg.haveSprite0 = false
+        fg.drawingSprite0 = false
+        // DblSprite is 0x20, 0x20 >> 2 == 0x08, so either 8 + 0 == 8 or 8 + 8 == 16
+        let spriteHeight = 8 + ((reg.control & int(PpuControl DblSprite)) >> 2)
+        for i in range(0, 64)
+            let oamIdx = i * 4
+            let spriteY = oam[oamIdx]
+            let diff = scanline - spriteY
+            if diff >= 0 && diff < spriteHeight
+                if i == 0
+                    fg.haveSprite0 = true
+                if fg.spriteCount == 8
+                    reg.status |= int(PpuStatus SOverflow)
+                    return
+                fg.sprites[fg.spriteCount].y = spriteY
+                fg.sprites[fg.spriteCount].id = oam[oamIdx + 1]
+                fg.sprites[fg.spriteCount].attr = oam[oamIdx + 2]
+                fg.sprites[fg.spriteCount].x = oam[oamIdx + 3]
+                fg.spriteCount++
+
+    def reverse8(val: int): int
+        var res = uint(val)
+        res = ((res & 0xF0) >> 0x04) | ((res & 0x0F) << 0x04)
+        res = ((res & 0xCC) >> 0x02) | ((res & 0x33) << 0x02)
+        res = ((res & 0xAA) >> 0x01) | ((res & 0x55) << 0x01)
+        return int(res)
+
+    def preloadSprites()
+        let spriteHeight = 8 + ((reg.control & int(PpuControl DblSprite)) >> 2)
+        for i in range(0, fg.spriteCount)
+            var lsbAddr = 0
+            let spriteRow = scanline - fg.sprites[i].y
+            if spriteHeight == 8
+                lsbAddr = (reg.control & int(PpuControl FgTbl)) << 9 // either 0 or 1 << 12
+                lsbAddr |= fg.sprites[i].id << 4
+                if (fg.sprites[i].attr & int(0x80)) == 0 // not vertically flipped
+                    lsbAddr |= spriteRow
+                else // vertically flipped
+                    lsbAddr |= 7 - spriteRow
+            else
+                lsbAddr = (fg.sprites[i].id & 1) << 12
+                if spriteRow < 8
+                    lsbAddr |= (fg.sprites[i].id & int(0xFE)) << 4
+                else
+                    lsbAddr |= ((fg.sprites[i].id & int(0xFE)) + 1) << 4
+                if (fg.sprites[i].attr & int(0x80)) == 0 // not vertically flipped
+                    lsbAddr |= spriteRow & 7
+                else // vertically flipped
+                    lsbAddr |= 7 - (spriteRow & 7)
+            let msbAddr = lsbAddr + 8
+            fg.spriteShiftLsb[i] = ppuBus->read(lsbAddr)
+            fg.spriteShiftMsb[i] = ppuBus->read(msbAddr)
+            if (fg.sprites[i].attr & int(0x40)) != 0 // horizontally flipped
+                fg.spriteShiftLsb[i] = reverse8(fg.spriteShiftLsb[i])
+                fg.spriteShiftMsb[i] = reverse8(fg.spriteShiftMsb[i])
 
     def isRenderEnabled()
         return (reg.mask & (int(PpuMask ShowBg) | int(PpuMask ShowFg))) != 0
@@ -291,14 +380,49 @@ class Ppu2C02: Device
             reg.vAddr |= coarseY << 5
 
     def renderPixel()
-        let currentBit = int(0x8000) >> reg.fineX
-        let shiftL = 15 - reg.fineX
-        let shiftH = 14 - reg.fineX
-        let bgPixel = ((bg.shiftLsb & currentBit) >> shiftL) | ((bg.shiftMsb & currentBit) >> shiftH)
-        let bgPalette = ((bg.shiftLAttr & currentBit) >> shiftL) | ((bg.shiftHAttr & currentBit) >> shiftH)
-        let colorIdx = ppuBusDevice.palette[(bgPalette << 2) + bgPixel] & int(0x3F)
-        let color = rgbPalette[colorIdx]
-        backbuffer |> set_pixel(cycle, scanline, color)
+        var bgPixel = 0
+        var bgPalette = 0
+        var fgPixel = 0
+        var fgPalette = 0
+        var fgPriority = 0
+
+        if (reg.mask & int(PpuMask ShowBg)) != 0
+            if (reg.mask & int(PpuMask BgLeft)) != 0 || cycle > 8
+                let currentBit = int(0x8000) >> reg.fineX
+                let shiftL = 15 - reg.fineX
+                let shiftH = 14 - reg.fineX
+                bgPixel = ((bg.shiftLsb & currentBit) >> shiftL) | ((bg.shiftMsb & currentBit) >> shiftH)
+                bgPalette = ((bg.shiftLAttr & currentBit) >> shiftL) | ((bg.shiftHAttr & currentBit) >> shiftH)
+
+        if (reg.mask & int(PpuMask ShowFg)) != 0 && false
+            fg.drawingSprite0 = false
+            if (reg.mask & int(PpuMask FgLeft)) != 0 || cycle > 8
+                for i in range(0, fg.spriteCount)
+                    if fg.sprites[i].x > -8 && fg.sprites[i].x <= 0
+                        fgPixel = fg.spriteShiftLsb[i] & int(0x80) >> 8
+                        fgPixel |= fg.spriteShiftMsb[i] & int(0x80) >> 7
+                        fgPalette = (fg.sprites[i].attr & 3) + 4
+                        fgPriority = (fg.sprites[i].attr & int(0x20))
+                        if fgPixel != 0
+                            if i == 0
+                                fg.drawingSprite0 = true
+                            break
+
+        var pixel = bgPixel
+        var palette = bgPalette
+        if pixel == 0
+            if fgPixel != 0
+                pixel = fgPixel
+                palette = fgPalette
+        else
+            if fgPixel != 0 && fgPriority != 0
+                if fg.haveSprite0 && fg.drawingSprite0
+                    reg.status |= int(PpuStatus S0Hit)
+                pixel = fgPixel
+                palette = fgPalette
+
+        let colorIdx = ppuBusDevice.palette[(palette << 2) + pixel] & int(0x3F)
+        backbuffer |> set_pixel(cycle, scanline, rgbPalette[colorIdx])
         return
 
     def override checkAddress(address: int): bool
@@ -314,6 +438,8 @@ class Ppu2C02: Device
             reg.status &= ~int(PpuStatus VBlank)
             reg.w = false
             result = data
+        elif regId == 4
+            result = oam[reg.oamAddr]
         elif regId == 7
             var data = reg.ppuData
             reg.ppuData = ppuBus->read(reg.vAddr)
@@ -338,6 +464,10 @@ class Ppu2C02: Device
             reg.tAddr |= nameTable << 10
         elif regId == 1
             reg.mask = data
+        elif regId == 3
+            reg.oamAddr = data
+        elif regId == 4
+            oam[reg.oamAddr] = data
         elif regId == 5
             if reg.w
                 let fineY = data & 7
@@ -357,12 +487,10 @@ class Ppu2C02: Device
                 reg.tAddr &= int(0xFF00)
                 reg.tAddr |= data
                 reg.vAddr = reg.tAddr
-                print("Write 6 (second) data {uint(data)} tAddr {uint(reg.tAddr)}\n")
                 reg.w = false
             else
                 reg.tAddr &= int(0x00FF)
                 reg.tAddr |= (data << 8) & int(0x3F00)  // highest bits are cleared
-                print("Write 6 (first) data {uint(data)} tAddr {uint(reg.tAddr)}\n")
                 reg.w = true
         elif regId == 7
             ppuWrites++

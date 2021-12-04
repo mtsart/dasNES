@@ -68,8 +68,6 @@ class Nes
             nesClocks = MAX_CLOCK_PER_UPDATE
         if cpu.halt
             nesClocks = 0l
-        //if nesClocks > 300l
-        //    nesClocks = 300l
         let updateTime = double(nesClocks) / double(PPU_CLOCK_SPEED)
         timeLeft -= updateTime
         timePassed += updateTime

@@ -4,6 +4,7 @@ let
     PRG_ROM_CHUNK = 16384
     CHR_ROM_CHUNK = 8192
     TRAINER_SIZE = 512
+    known_mappers <- [[int 0; 2]]
 
 struct NESFileHdr
     magic: uint8[4]
@@ -82,7 +83,12 @@ def load_rom(fn: string): NesRom?
         res.useMirroring = (uint(fileHdr.flags6) & 0x08) != 0x00
         res.mapper = int((uint(fileHdr.flags6) >> 0x04) | (uint(fileHdr.flags7) & 0xF0))
 
-        if res.mapper != 0
+        var known = false
+        for m in known_mappers
+            if res.mapper == m
+                known = true
+                break
+        if !known
             res.error = "Unsupported mapper {res.mapper}"
             return
 

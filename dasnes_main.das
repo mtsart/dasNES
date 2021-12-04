@@ -17,7 +17,7 @@ def initialize
     set_window_title("dasNES")
     nes = new Nes()
     nes->init()
-    rom = load_rom("rom/donkey_kong.nes")
+    rom = load_rom("rom/nestest.nes")
     if rom.isValid
         nes->insertCartridge(rom)
         nes->reset()
